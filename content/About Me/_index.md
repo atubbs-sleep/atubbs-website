@@ -3,9 +3,8 @@ date: "2022-12-26"
 image:
   caption: NASA
   filename: covers/nasa-Q1p7bh3SHj8-unsplash.jpg
-title: Home
+title: Andrew S. Tubbs
 toc: true
-
 ---
 
 ## About Me
