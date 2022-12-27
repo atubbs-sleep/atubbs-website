@@ -5,9 +5,8 @@ image:
   filename: covers/nasa-Q1p7bh3SHj8-unsplash.jpg
 title: Home
 toc: true
-
 ---
-
+ 
 ## About Me
 I am an [MD/PhD candidate](https://mdphd.medicine.arizona.edu/student/andrew-s-tubbs-phd) at the University of Arizona College of Medicine - Tucson. My research explores how sleep and circadian rhythms modify mental illness and increase risk for suicide, with a primary focus on the [Mind after Midnight Hypothesis](https://sleepeducation.org/mind-after-midnight/). You can read more about the research supporting this hypothesis [here](/the-mind-after-midnight/).
 
