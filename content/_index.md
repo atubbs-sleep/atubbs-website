@@ -5,7 +5,6 @@ image:
   filename: covers/nasa-Q1p7bh3SHj8-unsplash.jpg
 title: Home
 toc: true
-
 ---
 
 ## About Me
