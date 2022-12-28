@@ -1,0 +1,1084 @@
+---
+title: Insomnia, Depression, and Sleep Duration
+author: Andrew S. Tubbs
+date: 'Published January 24, 2020'
+slug: PHQ-insomnia
+categories: []
+tags:
+  - depression
+  - insomnia
+  - PHQ-9
+  - SHADES
+subtitle: ''
+summary: ''
+authors: []
+lastmod: '2022-12-27T07:31:16-07:00'
+featured: no
+image:
+  caption: ''
+  focal_point: ''
+  preview_only: no
+projects: []
+output:
+  html_document:
+    code_download: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T,warning=F,message=F)
+```
+```{css, echo=FALSE}
+pre {
+  max-height: 300px;
+  overflow-y: auto;
+}
+```
+
+## Summary
+These analyses were published as ["Relationship between insomnia and depression in a community sample depends on habitual sleep duration"](https://doi.org/10.1007/s41105-020-00255-z) in the journal _Sleep and Biological Rhythms_. They were inspired by a study by [Perlis et al.](https://pubmed.ncbi.nlm.nih.gov/9359976/) using canonical correlations to relate individual sleep EEG features to specific depressive symptoms. The principal findings were that 1) insomnia severity and sleep duration were both associated with individual depression symptoms, 2) insomnia, but not sleep duration, was related to depression severity among depressed individuals (PHQ-9 score > 10), and 3) the interaction between insomnia and short sleep duration in predicting depression severity was small and negative, suggesting shared variance between insomnia and sleep duration. 
+
+## Dataset
+The data used for these analyses derive from the Sleep and Healthy Activity, Diet, Environment, and Socialization [(SHADES)](https://www.sleephealthresearch.com/shades/index.html) Study conducted by Michael Grandner and funded by the National Institute of Environmental Health Sciences (R21ES022931). 
+
+## Variables
+Insomnia severity was measured using the Insomnia Severity Index. Depression severity and symptoms were measured using the PHQ-9. Symptoms were measured individually and combined into an adjusted PHQ-9 total score (excluding the sleep item to avoid collinearity). Sleep duration was derived from a single self-report question used in the NHANES and categorized as Short Sleep (< 7 hours), Recommended Sleep (7-8 hours), and Long Sleep (> 8 hours). Covariates were age, sex, race, education, and BMI (by self-report).
+
+```{r, warning=F}
+#### Load Packages ####
+library(gtsummary)
+library(gt)
+library(nnet)
+library(foreign)
+library(ggpubr)
+library(car)
+library(broom)
+library(tidyverse)
+
+#### Load Data ####
+phq9.data <- read.dta("c:/users/atala/sync/research/data/shades/shades.dta") %>% as_tibble() %>%
+  transmute(
+    "ID" = response_id, 
+    "ISItotal" = isi,
+    "ISIfalling" = isi1_falling, 
+    "ISIstaying" = isi2_staying, 
+    "ISIema" = isi3_ema,
+    "ISIsatisfied" = as.numeric(isi4_satisfied) %>% 
+      factor(., levels = c("1","2","3","4","5"),labels = c("Very Satisfied","Satisfied","Neutral","Dissatisfied","Very Dissatisfied")), 
+    "ISIinterfere" = isi5_interfere, 
+    "ISInoticeable" = isi6_noticeable, 
+    "ISIworried" = isi7_worried,
+    "ISIscore" = case_when(ISItotal < 8 ~ "No Insomnia",
+                           ISItotal %in% 8:14 ~ "Subthreshold Insomnia",
+                           ISItotal %in% 15:21 ~ "Moderate Insomnia",
+                           ISItotal > 21 ~ "Severe Insomnia") %>%
+      factor(levels=c("No Insomnia","Subthreshold Insomnia","Moderate Insomnia","Severe Insomnia")),
+    "PHQinterest" = phq1_interest, 
+    "PHQdepress" = phq2_depress, 
+    "PHQsleep" = phq3_sleep, 
+    "PHQtired" = phq4_tired,
+    "PHQappetite" = phq5_appetite,  
+    "PHQfailure" = phq6_failure, 
+    "PHQconcentrate" = phq7_concentrate,
+    "PHQpsychomotor" = phq8_psychomotor, 
+    "PHQsuicide" = phq9_suicide, 
+    "PHQdifficulty" = phq10_difficulty,
+    "PHQtotal" = phq_total,
+    "PHQtotal2" = PHQtotal - PHQsleep,
+    "PHQscore" = case_when(PHQtotal < 5 ~ "Minimal Depression",
+                            PHQtotal %in% 5:9 ~ "Mild Depression",
+                            PHQtotal %in% 10:14 ~ "Moderate Depression",
+                            PHQtotal %in% 15:19 ~ "Moderately-Severe Depression",
+                            PHQtotal > 19 ~ "Severe Depression") %>%
+      factor(levels=c("Minimal Depression","Mild Depression","Moderate Depression",
+                      "Moderately-Severe Depression","Severe Depression")),
+    "Depressed" = case_when(PHQtotal > 9 ~ "Depressed",
+                             PHQtotal < 10 ~ "Not Depressed") %>%
+      factor(levels = c("Not Depressed","Depressed")),
+    "TST" = nhanes_tst, 
+    "SleepDuration" = case_when(TST>8~"Long Sleep", 
+                                 TST<7~"Short Sleep", 
+                                 TST %in% 7:8~"Recommended Sleep") %>% 
+      factor(levels = c("Recommended Sleep","Short Sleep","Long Sleep")),
+    "Age" = demo_age_years2,
+    "Sex" = demo_sex %>% factor(0:1,c("Male","Female")),
+    "Race" = case_when(demo_race_white_only==1~"White",
+                       demo_race_black_only==1~"Black",
+                       demo_race_asian_only==1~"Asian",
+                       demo_race_hisp_only==1~"Hispanic",
+                       demo_race_native_only==1~"Native",
+                       demo_race_pacisland_only==1~"Other",
+                       demo_race_multiracial==1~"Other") %>% 
+      factor(levels = c("White","Black","Asian","Hispanic","Native","Other")) %>%
+      replace_na(., "Other"),
+    "Education" = factor(demo_education2, 0:3,c("College","Some College","High School","Less than high school")),
+    "BMI" = body_weight_curr_kg/((body_height_cm)/100)^2
+  )
+```
+
+## Table 1
+The characteristics of the sample are presented below in Table 1. 
+
+```{r, warning=F}
+#### Table 1: Demographics and Response Characteristics of the Sample ####
+tbl_summary(
+  phq9.data,
+  label = list("Age" = "Age (years)", "BMI" = "BMI (kg/m^2)", "ISIscore" = "ISI Category","PHQscore" = "PHQ-9 Category"),
+  by="SleepDuration",
+  include = c("SleepDuration","Age","BMI","Sex","Education","Race","ISIscore","PHQscore"),
+  statistic = list(all_continuous() ~ "{mean} ({sd})", all_categorical() ~ "{n} ({p}%)"),
+  digits = list(all_continuous() ~ c(1,2), all_categorical() ~ c(0,1))
+) %>% add_overall() %>% add_p(test = list(all_continuous() ~ "aov", all_categorical() ~ "chisq.test"))
+```
+
+## Data Distribution
+Let's look at the distribution of the data. 
+
+```{r, warning=F} 
+#### Histograms to justify QP modeling ####
+phq9.hist <- phq9.data %>% select(ID,PHQinterest,PHQdepress,PHQsleep,PHQtired,PHQappetite,
+                                  PHQfailure,PHQconcentrate,PHQpsychomotor,PHQsuicide) %>% 
+  gather("Symptom","Frequency",-"ID") %>%
+  mutate(Symptom = factor(Symptom,levels=c("PHQinterest","PHQdepress","PHQsleep","PHQtired","PHQappetite",
+                                            "PHQfailure","PHQconcentrate","PHQpsychomotor","PHQsuicide"),
+                           labels = c("Anhedonia","Depressed Mood","Disturbed Sleep","Fatigue","Appetite Dysregulation",
+                                      "Feelings of Failure","Difficulty Concentrating","Psychomotor Symptoms","Suicidal Behavior"))
+         )
+totalphq.plot <- gghistogram(phq9.data,x="PHQtotal",legend = "none",ylab = "Number of Responses",xlab = "PHQ - 9 Total Score", 
+                             title = "(A)",bins=28,ggtheme=theme_pubr(),fill="black")
+itemphq.plot <- gghistogram(phq9.hist,x="Frequency",legend = "none",ylab = "Number of Responses",xlab = "PHQ - 9 Total Score",
+                            title = "(B)",bins=28,facet.by = "Symptom",ggtheme=theme_pubr(),fill="black",binwidth = 1)
+```
+
+The simplest approach to relate insomnia and sleep duration to depression would be using linear regression. This assumes, however, that the outcome (i.e., depression severity and frequency of symptoms) are normally distributed. Using histograms, however, it is clear these data are not normally distributed. In fact, they follow a Poisson-like distribution, with most responses skewed toward smaller values. 
+
+```{r, fig.height=10,echo=F}
+ggarrange(totalphq.plot,itemphq.plot,ncol = 1, nrow = 2)
+```
+
+## Model the Whole Sample
+The following code models the adjusted PHQ-9 score ("PHQtotal2") as a function of insomnia severity and sleep duration. Models are unadjusted and adjusted for age, sex, race, and ethnicity. 
+
+```{r, warning=F}
+#### Analysis 1) Model adjPHQ-9 Score as a function of ISI score and sleep duration in the whole sample ####
+## Total Score
+# Unadjusted
+phqscore.qp <- glm(PHQtotal2~ISItotal*SleepDuration,family="quasipoisson",phq9.data)
+phqscore.qp.maineff <- bind_cols("Symptom" = rep("Total",5),
+                                 "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                 bind_rows(deltaMethod(phqscore.qp, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(phqscore.qp, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(phqscore.qp, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(phqscore.qp, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(phqscore.qp, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                 "p-value" = summary(phqscore.qp)$coefficients[2:6,4])
+# Adjusted for Age, Sex, Race, Education, BMI
+phqscore.qp.full <- glm(PHQtotal2~ISItotal*SleepDuration+Age+Sex+Race+Education+BMI,family="quasipoisson",phq9.data)
+phqscore.qp.full.maineff <- bind_cols("Symptom" = rep("Total",5),
+                                      "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                      bind_rows(deltaMethod(phqscore.qp.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(phqscore.qp.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(phqscore.qp.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(phqscore.qp.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(phqscore.qp.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                      "p-value" = summary(phqscore.qp.full)$coefficients[c(2:4,16,17),4])
+# Plot PHQScore vs. ISItotal by SleepDuration
+phqscore.plot <- ggplot(
+  data = bind_cols(phq9.data %>% select(ISItotal,SleepDuration,PHQtotal2),
+                   predict(phqscore.qp, type="response",se.fit=TRUE)),
+  aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  geom_point(aes(y = PHQtotal2),position="jitter")+
+  labs(x = "ISI Score",y="Adjusted PHQ - 9 Score")+
+  theme_pubr()+theme(legend.title = element_blank())
+
+## Individual Symptoms
+# Anhedonia
+interest.qp <- glm(PHQinterest~ISItotal*SleepDuration,phq9.data,family="quasipoisson")
+interest.qp.maineff <- bind_cols("Symptom" = rep("Interest",5),
+                                 "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                 bind_rows(deltaMethod(interest.qp, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(interest.qp, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(interest.qp, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(interest.qp, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(interest.qp, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                 "p-value" = summary(interest.qp)$coefficients[2:6,4])
+interest.qp.full <- glm(PHQinterest~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.data,family="quasipoisson")
+interest.qp.full.maineff <- bind_cols("Symptom" = rep("Interest",5),
+                                      "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                      bind_rows(deltaMethod(interest.qp.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(interest.qp.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(interest.qp.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(interest.qp.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(interest.qp.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                      "p-value" = summary(interest.qp.full)$coefficients[c(2:4,16,17),4])
+interest.plot <- ggplot(
+  data = bind_cols(phq9.data %>% select(ISItotal,SleepDuration,PHQinterest),
+                   predict(interest.qp, type="response",se.fit=TRUE)),
+  aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,
+                  fill=SleepDuration),
+              alpha=.25)+
+  labs(x = "ISI Score",y="Anhedonia")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Depressed Mood
+depress.qp <- glm(PHQdepress~ISItotal*SleepDuration,phq9.data,family="quasipoisson")
+depress.qp.maineff <- bind_cols("Symptom" = rep("Depress",5),
+                                "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                bind_rows(deltaMethod(depress.qp, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(depress.qp, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(depress.qp, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(depress.qp, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(depress.qp, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                "p-value" = summary(depress.qp)$coefficients[2:6,4])
+depress.qp.full <- glm(PHQdepress~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.data,family="quasipoisson")
+depress.qp.full.maineff <- bind_cols("Symptom" = rep("Depress",5),
+                                     "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                     bind_rows(deltaMethod(depress.qp.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(depress.qp.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(depress.qp.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(depress.qp.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(depress.qp.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                     "p-value" = summary(depress.qp.full)$coefficients[c(2:4,16,17),4])
+
+depress.plot <- ggplot(
+  data = bind_cols(phq9.data %>% select(ISItotal,SleepDuration,PHQdepress),
+                   predict(depress.qp, type="response",se.fit=TRUE)),
+  aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,
+                  fill=SleepDuration),
+              alpha=.25)+
+  labs(x = "ISI Score",y="Depressed Mood")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Appetite
+appetite.qp <- glm(PHQappetite~ISItotal*SleepDuration,phq9.data,family="quasipoisson")
+appetite.qp.maineff <- bind_cols("Symptom" = rep("Appetite",5),
+                                 "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                 bind_rows(deltaMethod(appetite.qp, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(appetite.qp, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(appetite.qp, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(appetite.qp, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                           deltaMethod(appetite.qp, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                 "p-value" = summary(appetite.qp)$coefficients[2:6,4])
+appetite.qp.full <- glm(PHQappetite~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.data,family="quasipoisson")
+appetite.qp.full.maineff <- bind_cols("Symptom" = rep("Appetite",5),
+                                      "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                      bind_rows(deltaMethod(appetite.qp.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(appetite.qp.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(appetite.qp.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(appetite.qp.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                deltaMethod(appetite.qp.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                      "p-value" = summary(appetite.qp.full)$coefficients[c(2:4,16,17),4])
+appetite.plot <- ggplot(
+  data = bind_cols(phq9.data %>% select(ISItotal,SleepDuration,PHQappetite),
+                   predict(appetite.qp, type="response",se.fit=TRUE)),
+  aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,
+                  fill=SleepDuration),
+              alpha=.25)+
+  labs(x = "ISI Score",y="Appetite Dysregulation")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Fatigue
+tired.qp <- glm(PHQtired~ISItotal*SleepDuration,phq9.data,family="quasipoisson")
+tired.qp.maineff <- bind_cols("Symptom" = rep("Tired",5),
+                              "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                              bind_rows(deltaMethod(tired.qp, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                        deltaMethod(tired.qp, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                        deltaMethod(tired.qp, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                        deltaMethod(tired.qp, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                        deltaMethod(tired.qp, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                              "p-value" = summary(tired.qp)$coefficients[2:6,4])
+tired.qp.full <- glm(PHQtired~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.data,family="quasipoisson")
+tired.qp.full.maineff <- bind_cols("Symptom" = rep("Tired",5),
+                                   "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                   bind_rows(deltaMethod(tired.qp.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                             deltaMethod(tired.qp.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                             deltaMethod(tired.qp.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                             deltaMethod(tired.qp.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                             deltaMethod(tired.qp.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                   "p-value" = summary(tired.qp.full)$coefficients[c(2:4,16,17),4])
+tired.plot <- ggplot(
+  data = bind_cols(phq9.data %>% select(ISItotal,SleepDuration,PHQtired),
+                   predict(tired.qp, type="response",se.fit=TRUE)),
+  aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,
+                  fill=SleepDuration),
+              alpha=.25)+
+  labs(x = "ISI Score",y="Fatigue")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Difficulty Concentrating
+concentrate.qp <- glm(PHQconcentrate~ISItotal*SleepDuration,phq9.data,family="quasipoisson")
+concentrate.qp.maineff <- bind_cols("Symptom" = rep("Concentrate",5),
+                                    "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                    bind_rows(deltaMethod(concentrate.qp, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(concentrate.qp, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(concentrate.qp, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(concentrate.qp, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(concentrate.qp, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                    "p-value" = summary(concentrate.qp)$coefficients[2:6,4])
+concentrate.qp.full <- glm(PHQconcentrate~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.data,family="quasipoisson")
+concentrate.qp.full.maineff <- bind_cols("Symptom" = rep("Concentrate",5),
+                                         "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                         bind_rows(deltaMethod(concentrate.qp.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(concentrate.qp.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(concentrate.qp.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(concentrate.qp.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(concentrate.qp.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                         "p-value" = summary(concentrate.qp.full)$coefficients[c(2:4,16,17),4])
+concentrate.plot <- ggplot(
+  data = bind_cols(phq9.data %>% select(ISItotal,SleepDuration,PHQconcentrate),
+                   predict(concentrate.qp, type="response",se.fit=TRUE)),
+  aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,
+                  fill=SleepDuration),
+              alpha=.25)+
+  labs(x = "ISI Score",y="Difficulty Concentrating")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Feelings of Failure
+failure.qp <- glm(PHQfailure~ISItotal*SleepDuration,phq9.data,family="quasipoisson")
+failure.qp.maineff <- bind_cols("Symptom" = rep("Failure",5),
+                                "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                bind_rows(deltaMethod(failure.qp, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(failure.qp, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(failure.qp, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(failure.qp, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(failure.qp, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                "p-value" = summary(failure.qp)$coefficients[2:6,4])
+failure.qp.full <- glm(PHQfailure~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.data,family="quasipoisson")
+failure.qp.full.maineff <- bind_cols("Symptom" = rep("Failure",5),
+                                     "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                     bind_rows(deltaMethod(failure.qp.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(failure.qp.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(failure.qp.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(failure.qp.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(failure.qp.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                     "p-value" = summary(failure.qp.full)$coefficients[c(2:4,16,17),4])
+failure.plot <- ggplot(
+  data = bind_cols(phq9.data %>% select(ISItotal,SleepDuration,PHQfailure),
+                   predict(failure.qp, type="response",se.fit=TRUE)),
+  aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,
+                  fill=SleepDuration),
+              alpha=.25)+
+  labs(x = "ISI Score",y="Feelings of Failure")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Psychomotor Disturbance
+psychomotor.qp <- glm(PHQpsychomotor~ISItotal*SleepDuration,phq9.data,family="quasipoisson")
+psychomotor.qp.maineff <- bind_cols("Symptom" = rep("Psychomotor",5),
+                                    "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                    bind_rows(deltaMethod(psychomotor.qp, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(psychomotor.qp, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(psychomotor.qp, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(psychomotor.qp, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(psychomotor.qp, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                    "p-value" = summary(psychomotor.qp)$coefficients[2:6,4])
+psychomotor.qp.full <- glm(PHQpsychomotor~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.data,family="quasipoisson")
+psychomotor.qp.full.maineff <- bind_cols("Symptom" = rep("Psychomotor",5),
+                                         "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                         bind_rows(deltaMethod(psychomotor.qp.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(psychomotor.qp.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(psychomotor.qp.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(psychomotor.qp.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(psychomotor.qp.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                         "p-value" = summary(psychomotor.qp.full)$coefficients[c(2:4,16,17),4])
+psychomotor.plot <- ggplot(
+  data = bind_cols(phq9.data %>% select(ISItotal,SleepDuration,PHQpsychomotor),
+                   predict(psychomotor.qp, type="response",se.fit=TRUE)),
+  aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,
+                  fill=SleepDuration),
+              alpha=.25)+
+  labs(x = "ISI Score",y="Psychomotor Disturbance")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Suicidal behavior
+suicide.qp <- glm(PHQsuicide~ISItotal*SleepDuration,phq9.data,family="quasipoisson")
+suicide.qp.maineff <- bind_cols("Symptom" = rep("Suicide",5),
+                                "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                bind_rows(deltaMethod(suicide.qp, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(suicide.qp, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(suicide.qp, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(suicide.qp, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                          deltaMethod(suicide.qp, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                "p-value" = summary(suicide.qp)$coefficients[2:6,4])
+suicide.qp.full <- glm(PHQsuicide~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.data,family="quasipoisson")
+suicide.qp.full.maineff <- bind_cols("Symptom" = rep("Suicide",5),
+                                     "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                     bind_rows(deltaMethod(suicide.qp.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(suicide.qp.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(suicide.qp.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(suicide.qp.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                               deltaMethod(suicide.qp.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                     "p-value" = summary(suicide.qp.full)$coefficients[c(2:4,16,17),4])
+suicide.plot <- ggplot(
+  data = bind_cols(phq9.data %>% select(ISItotal,SleepDuration,PHQsuicide),
+                   predict(suicide.qp, type="response",se.fit=TRUE)),
+  aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,
+                  fill=SleepDuration),
+              alpha=.25)+
+  labs(x = "ISI Score",y="Suicidal Behavior")+
+  theme_pubr()+theme(legend.position = "none")
+
+#### Table 2: Sleep influence by symptom in unadjusted and adjusted models ####
+phq9.symptom.summary <- bind_cols(
+  bind_rows(phqscore.qp.maineff,interest.qp.maineff,depress.qp.maineff,appetite.qp.maineff,tired.qp.maineff,
+            concentrate.qp.maineff,failure.qp.maineff,psychomotor.qp.maineff,suicide.qp.maineff) %>%
+    transmute(Symptom = factor(Symptom,levels = c("Total","Interest","Depress","Appetite","Tired","Concentrate","Failure","Psychomotor","Suicide"),
+                            labels = c("Adjusted PHQ-9 Score","Anhedonia","Depressed Mood","Appetite dysregulation","Fatigue",
+                                       "Difficulty concentrating","Feelings of failure","Psychomotor disturbance","Suicidal behavior")),
+           Parameter,
+           "PR" = round(Estimate,2),
+           "SE" = round(SE,2),
+           "95% CI" = paste0("[",round(`2.5 %`,2),", ",round(`97.5 %`,2),"]"),
+           "p-value" = round(`p-value`,4)),
+  bind_rows(phqscore.qp.full.maineff,interest.qp.full.maineff,depress.qp.full.maineff,appetite.qp.full.maineff,tired.qp.full.maineff,
+            concentrate.qp.full.maineff,failure.qp.full.maineff,psychomotor.qp.full.maineff,suicide.qp.full.maineff) %>%
+    transmute("aPR" = round(Estimate,2),
+              "aSE" = round(SE,2),
+              "a95% CI" = paste0("[",round(`2.5 %`,2),", ",round(`97.5 %`,2),"]"),
+              "ap-value" = round(`p-value`,4))
+)
+
+```
+
+The results of these models are presented in the table below. The predictors of interest are ISI score, sleep duration, and their interaction. These are reported for each symptom and the overall PHQ-9 severity score (minus the sleep item due to collinearity). The adjusted model results are in the right half of the table with headers appended by "a". 
+
+```{r, echo=F}
+gt(phq9.symptom.summary)
+```
+
+Figure 2 below illustrates how changes in ISI score are related to adjusted PHQ-9 score by sleep duration category. 
+
+```{r, fig.height=15,echo=F}
+#### Figure 2 ####
+ggarrange(ncol=1,nrow=2,
+  phqscore.plot,
+  ggarrange(interest.plot,depress.plot,appetite.plot,tired.plot,
+            concentrate.plot,failure.plot,psychomotor.plot,suicide.plot,
+            ncol=2,nrow=4)
+)
+```
+
+## Model Depressed Subjects Only
+Let's look at only the N=390 individuals with clinically significant depression symptoms (PHQ-9 > 10).
+
+```{r}
+#### Analysis 2: Depressed Subjects Only ####
+## Total Score
+# Unadjusted
+phq9.subset <- phq9.data[phq9.data$PHQtotal>9,]
+phqscore.qp.sub <- glm(PHQtotal2~ISItotal*SleepDuration,family="quasipoisson",phq9.subset)
+phqscore.qp.sub.maineff <- bind_cols("Symptom" = rep("Total",5),
+                                     "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                     bind_rows(deltaMethod(phqscore.qp.sub, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(phqscore.qp.sub, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(phqscore.qp.sub, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(phqscore.qp.sub, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(phqscore.qp.sub, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                     "p-value" = summary(phqscore.qp.sub)$coefficients[2:6,4])
+# Adjusted for Age, Sex, Race, Education, and BMI
+phqscore.qp.sub.full <- glm(PHQtotal2~ISItotal*SleepDuration+Age+Sex+Race+Education+BMI,family="quasipoisson",phq9.subset)
+phqscore.qp.sub.full.maineff <- bind_cols("Symptom" = rep("Total",5),
+                                          "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                          bind_rows(deltaMethod(phqscore.qp.sub.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(phqscore.qp.sub.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(phqscore.qp.sub.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(phqscore.qp.sub.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(phqscore.qp.sub.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                          "p-value" = summary(phqscore.qp.sub.full)$coefficients[c(2:4,16,17),4])
+phq9.subset.predict <- predict(phqscore.qp.sub, type="response",se.fit=TRUE)
+phq9.subset$fit <- as.numeric(phq9.subset.predict$fit)
+phq9.subset$se.fit <- as.numeric(phq9.subset.predict$se.fit)
+phqscore.sub.plot <- ggplot(phq9.subset, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  geom_point(aes(y = PHQtotal2),position="jitter")+
+  labs(x = "ISI Score",y="Adjusted PHQ - 9 Score")+
+  theme_pubr()+theme(legend.title = element_blank())
+
+## Individual Symptoms
+# Anhedonia
+interest.qp.sub <- glm(PHQinterest~ISItotal*SleepDuration,phq9.subset,family="quasipoisson")
+interest.qp.sub.maineff <- bind_cols("Symptom" = rep("Interest",5),
+                                     "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                     bind_rows(deltaMethod(interest.qp.sub, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(interest.qp.sub, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(interest.qp.sub, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(interest.qp.sub, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(interest.qp.sub, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                     "p-value" = summary(interest.qp.sub)$coefficients[2:6,4])
+interest.qp.sub.full <- glm(PHQinterest~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset,family="quasipoisson")
+interest.qp.sub.full.maineff <- bind_cols("Symptom" = rep("Interest",5),
+                                          "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                          bind_rows(deltaMethod(interest.qp.sub.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(interest.qp.sub.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(interest.qp.sub.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(interest.qp.sub.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(interest.qp.sub.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                          "p-value" = summary(interest.qp.sub.full)$coefficients[c(2:4,16,17),4])
+phq9.subset.predict<- predict(interest.qp.sub, type="response",se.fit=TRUE)
+phq9.subset$fit <- as.numeric(phq9.subset.predict$fit)
+phq9.subset$se.fit <- as.numeric(phq9.subset.predict$se.fit)
+interest.sub.plot <- ggplot(phq9.subset, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Anhedonia")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Depressed Mood
+depress.qp.sub <- glm(PHQdepress~ISItotal*SleepDuration,phq9.subset,family="quasipoisson")
+depress.qp.sub.maineff <- bind_cols("Symptom" = rep("Depress",5),
+                                    "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                    bind_rows(deltaMethod(depress.qp.sub, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(depress.qp.sub, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(depress.qp.sub, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(depress.qp.sub, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(depress.qp.sub, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                    "p-value" = summary(depress.qp.sub)$coefficients[2:6,4])
+depress.qp.sub.full <- glm(PHQdepress~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset,family="quasipoisson")
+depress.qp.sub.full.maineff <- bind_cols("Symptom" = rep("Depress",5),
+                                         "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                         bind_rows(deltaMethod(depress.qp.sub.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(depress.qp.sub.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(depress.qp.sub.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(depress.qp.sub.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(depress.qp.sub.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                         "p-value" = summary(depress.qp.sub.full)$coefficients[c(2:4,16,17),4])
+phq9.subset.predict<- predict(depress.qp.sub, type="response",se.fit=TRUE)
+phq9.subset$fit <- as.numeric(phq9.subset.predict$fit)
+phq9.subset$se.fit <- as.numeric(phq9.subset.predict$se.fit)
+depress.sub.plot <- ggplot(phq9.subset, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Depressed Mood")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Appetite
+appetite.qp.sub <- glm(PHQappetite~ISItotal*SleepDuration,phq9.subset,family="quasipoisson")
+appetite.qp.sub.maineff <- bind_cols("Symptom" = rep("Appetite",5),
+                                     "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                     bind_rows(deltaMethod(appetite.qp.sub, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(appetite.qp.sub, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(appetite.qp.sub, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(appetite.qp.sub, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(appetite.qp.sub, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                     "p-value" = summary(appetite.qp.sub)$coefficients[2:6,4])
+appetite.qp.sub.full <- glm(PHQappetite~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset,family="quasipoisson")
+appetite.qp.sub.full.maineff <- bind_cols("Symptom" = rep("Appetite",5),
+                                          "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                          bind_rows(deltaMethod(appetite.qp.sub.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(appetite.qp.sub.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(appetite.qp.sub.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(appetite.qp.sub.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(appetite.qp.sub.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                          "p-value" = summary(appetite.qp.sub.full)$coefficients[c(2:4,16,17),4])
+phq9.subset.predict<- predict(appetite.qp.sub, type="response",se.fit=TRUE)
+phq9.subset$fit <- as.numeric(phq9.subset.predict$fit)
+phq9.subset$se.fit <- as.numeric(phq9.subset.predict$se.fit)
+appetite.sub.plot <- ggplot(phq9.subset, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Appetite Dysregulation")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Fatigue
+tired.qp.sub <- glm(PHQtired~ISItotal*SleepDuration,phq9.subset,family="quasipoisson")
+tired.qp.sub.maineff <- bind_cols("Symptom" = rep("Tired",5),
+                                  "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                  bind_rows(deltaMethod(tired.qp.sub, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                            deltaMethod(tired.qp.sub, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                            deltaMethod(tired.qp.sub, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                            deltaMethod(tired.qp.sub, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                            deltaMethod(tired.qp.sub, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                  "p-value" = summary(tired.qp.sub)$coefficients[2:6,4])
+tired.qp.sub.full <- glm(PHQtired~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset,family="quasipoisson")
+tired.qp.sub.full.maineff <- bind_cols("Symptom" = rep("Tired",5),
+                                       "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                       bind_rows(deltaMethod(tired.qp.sub.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                 deltaMethod(tired.qp.sub.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                 deltaMethod(tired.qp.sub.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                 deltaMethod(tired.qp.sub.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                 deltaMethod(tired.qp.sub.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                       "p-value" = summary(tired.qp.sub.full)$coefficients[c(2:4,16,17),4])
+phq9.subset.predict<- predict(tired.qp.sub, type="response",se.fit=TRUE)
+phq9.subset$fit <- as.numeric(phq9.subset.predict$fit)
+phq9.subset$se.fit <- as.numeric(phq9.subset.predict$se.fit)
+tired.sub.plot <- ggplot(phq9.subset, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Fatigue")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Difficulty Concentrating
+concentrate.qp.sub <- glm(PHQconcentrate~ISItotal*SleepDuration,phq9.subset,family="quasipoisson")
+concentrate.qp.sub.maineff <- bind_cols("Symptom" = rep("Concentrate",5),
+                                        "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                        bind_rows(deltaMethod(concentrate.qp.sub, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                                  deltaMethod(concentrate.qp.sub, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                                  deltaMethod(concentrate.qp.sub, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                                  deltaMethod(concentrate.qp.sub, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                                  deltaMethod(concentrate.qp.sub, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                        "p-value" = summary(concentrate.qp.sub)$coefficients[2:6,4])
+concentrate.qp.sub.full <- glm(PHQconcentrate~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset,family="quasipoisson")
+concentrate.qp.sub.full.maineff <- bind_cols("Symptom" = rep("Concentrate",5),
+                                             "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                             bind_rows(deltaMethod(concentrate.qp.sub.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                       deltaMethod(concentrate.qp.sub.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                       deltaMethod(concentrate.qp.sub.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                       deltaMethod(concentrate.qp.sub.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                       deltaMethod(concentrate.qp.sub.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                             "p-value" = summary(concentrate.qp.sub.full)$coefficients[c(2:4,16,17),4])
+phq9.subset.predict<- predict(concentrate.qp.sub, type="response",se.fit=TRUE)
+phq9.subset$fit <- as.numeric(phq9.subset.predict$fit)
+phq9.subset$se.fit <- as.numeric(phq9.subset.predict$se.fit)
+concentrate.sub.plot <- ggplot(phq9.subset, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Difficulty Concentrating")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Feelings of Failure
+failure.qp.sub <- glm(PHQfailure~ISItotal*SleepDuration,phq9.subset,family="quasipoisson")
+failure.qp.sub.maineff <- bind_cols("Symptom" = rep("Failure",5),
+                                    "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                    bind_rows(deltaMethod(failure.qp.sub, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(failure.qp.sub, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(failure.qp.sub, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(failure.qp.sub, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(failure.qp.sub, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                    "p-value" = summary(failure.qp.sub)$coefficients[2:6,4])
+failure.qp.sub.full <- glm(PHQfailure~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset,family="quasipoisson")
+failure.qp.sub.full.maineff <- bind_cols("Symptom" = rep("Failure",5),
+                                         "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                         bind_rows(deltaMethod(failure.qp.sub.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(failure.qp.sub.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(failure.qp.sub.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(failure.qp.sub.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(failure.qp.sub.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                         "p-value" = summary(failure.qp.sub.full)$coefficients[c(2:4,16,17),4])
+phq9.subset.predict<- predict(failure.qp.sub, type="response",se.fit=TRUE)
+phq9.subset$fit <- as.numeric(phq9.subset.predict$fit)
+phq9.subset$se.fit <- as.numeric(phq9.subset.predict$se.fit)
+failure.sub.plot <- ggplot(phq9.subset, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Feelings of Failure")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Psychomotor Disturbance
+psychomotor.qp.sub <- glm(PHQpsychomotor~ISItotal*SleepDuration,phq9.subset,family="quasipoisson")
+psychomotor.qp.sub.maineff <- bind_cols("Symptom" = rep("Psychomotor",5),
+                                        "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                        bind_rows(deltaMethod(psychomotor.qp.sub, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                                  deltaMethod(psychomotor.qp.sub, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                                  deltaMethod(psychomotor.qp.sub, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                                  deltaMethod(psychomotor.qp.sub, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                                  deltaMethod(psychomotor.qp.sub, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                        "p-value" = summary(psychomotor.qp.sub)$coefficients[2:6,4])
+psychomotor.qp.sub.full <- glm(PHQpsychomotor~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset,family="quasipoisson")
+psychomotor.qp.sub.full.maineff <- bind_cols("Symptom" = rep("Psychomotor",5),
+                                             "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                             bind_rows(deltaMethod(psychomotor.qp.sub.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                       deltaMethod(psychomotor.qp.sub.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                       deltaMethod(psychomotor.qp.sub.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                       deltaMethod(psychomotor.qp.sub.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                       deltaMethod(psychomotor.qp.sub.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                             "p-value" = summary(psychomotor.qp.sub.full)$coefficients[c(2:4,16,17),4])
+phq9.subset.predict<- predict(psychomotor.qp.sub, type="response",se.fit=TRUE)
+phq9.subset$fit <- as.numeric(phq9.subset.predict$fit)
+phq9.subset$se.fit <- as.numeric(phq9.subset.predict$se.fit)
+psychomotor.sub.plot <- ggplot(phq9.subset, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Psychomotor Disturbance")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Suicidal behavior
+suicide.qp.sub <- glm(PHQsuicide~ISItotal*SleepDuration,phq9.subset,family="quasipoisson")
+suicide.qp.sub.maineff <- bind_cols("Symptom" = rep("Suicide",5),
+                                    "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                    bind_rows(deltaMethod(suicide.qp.sub, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(suicide.qp.sub, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(suicide.qp.sub, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(suicide.qp.sub, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                              deltaMethod(suicide.qp.sub, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                    "p-value" = summary(suicide.qp.sub)$coefficients[2:6,4])
+suicide.qp.sub.full <- glm(PHQsuicide~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset,family="quasipoisson")
+suicide.qp.sub.full.maineff <- bind_cols("Symptom" = rep("Suicide",5),
+                                         "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                         bind_rows(deltaMethod(suicide.qp.sub.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(suicide.qp.sub.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(suicide.qp.sub.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(suicide.qp.sub.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                   deltaMethod(suicide.qp.sub.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                         "p-value" = summary(suicide.qp.sub.full)$coefficients[c(2:4,16,17),4])
+phq9.subset.predict<- predict(suicide.qp.sub, type="response",se.fit=TRUE)
+phq9.subset$fit <- as.numeric(phq9.subset.predict$fit)
+phq9.subset$se.fit <- as.numeric(phq9.subset.predict$se.fit)
+suicide.sub.plot <- ggplot(phq9.subset, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Suicidal Behavior")+
+  theme_pubr()+theme(legend.position = "none")
+
+#### Table 3: Sleep influence by symptom in unadjusted/adjusted models for depressed only ####
+phq9.symptom.sub.summary <- bind_cols(
+  bind_rows(phqscore.qp.sub.maineff,interest.qp.sub.maineff,depress.qp.sub.maineff,appetite.qp.sub.maineff,tired.qp.sub.maineff,
+            concentrate.qp.sub.maineff,failure.qp.sub.maineff,psychomotor.qp.sub.maineff,suicide.qp.sub.maineff) %>%
+    transmute(Symptom = factor(Symptom,levels = c("Total","Interest","Depress","Appetite","Tired","Concentrate","Failure","Psychomotor","Suicide"),
+                               labels = c("Adjusted PHQ-9 Score","Anhedonia","Depressed Mood","Appetite dysregulation","Fatigue",
+                                          "Difficulty concentrating","Feelings of failure","Psychomotor disturbance","Suicidal behavior")),
+              Parameter,
+              "PR" = Estimate,
+              "SE" = round(SE,2),
+              "95% CI" = paste0("[",round(`2.5 %`,2),", ",round(`97.5 %`,2),"]"),
+              "p-value" = round(`p-value`,4)),
+  bind_rows(phqscore.qp.sub.full.maineff,interest.qp.sub.full.maineff,depress.qp.sub.full.maineff,appetite.qp.sub.full.maineff,
+            tired.qp.sub.full.maineff,concentrate.qp.sub.full.maineff,failure.qp.sub.full.maineff,psychomotor.qp.sub.full.maineff,
+            suicide.qp.sub.full.maineff) %>%
+    transmute("aPR" = Estimate,
+              "aSE" = round(SE,2),
+              "a95% CI" = paste0("[",round(`2.5 %`,2),", ",round(`97.5 %`,2),"]"),
+              "ap-value" = round(`p-value`,4))
+)
+
+```
+
+The table below shows their model results (as with the whole sample).
+
+```{r}
+gt(phq9.symptom.sub.summary)
+```
+
+The figure below shows how changing ISI score is related to adjusted PHQ-9 score by sleep duration in this group. 
+
+```{r, fig.height=15,echo=F}
+#### Figure 3 ####
+ggarrange(
+  ncol=1,nrow=2,
+  phqscore.sub.plot,
+  ggarrange(interest.sub.plot,depress.sub.plot,appetite.sub.plot,tired.sub.plot,
+            concentrate.sub.plot,failure.sub.plot,psychomotor.sub.plot,suicide.sub.plot,
+            ncol=2,nrow=4)
+)
+```
+
+## Model non-depressed subjects
+Finally, let's model the data for N=617 non-depressed individuals.
+
+```{r}                              
+#### Analysis 3: Non-depressed Subjects Only ####
+## Full Score
+# Unadjusted
+phq9.subset1 <- phq9.data[phq9.data$PHQtotal<10,]
+phqscore.qp.sub1 <- glm(PHQtotal2~ISItotal*SleepDuration,family="quasipoisson",phq9.subset1)
+phqscore.qp.sub1.maineff <- bind_cols("Symptom" = rep("Total",5),
+                                      "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                      bind_rows(deltaMethod(phqscore.qp.sub1, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(phqscore.qp.sub1, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(phqscore.qp.sub1, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(phqscore.qp.sub1, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(phqscore.qp.sub1, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                      "p-value" = summary(phqscore.qp.sub1)$coefficients[2:6,4])
+# Adjusted for Age, Sex, Race, Education, and BMI
+phqscore.qp.sub1.full <- glm(PHQtotal2~ISItotal*SleepDuration+Age+Sex+Race+Education+BMI,family="quasipoisson",phq9.subset1)
+phqscore.qp.sub1.full.maineff <- bind_cols("Symptom" = rep("Total",5),
+                                           "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                           bind_rows(deltaMethod(phqscore.qp.sub1.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(phqscore.qp.sub1.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(phqscore.qp.sub1.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(phqscore.qp.sub1.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(phqscore.qp.sub1.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                           "p-value" = summary(phqscore.qp.sub1.full)$coefficients[c(2:4,16,17),4])
+# Plot
+phq9.subset1.predict <- predict(phqscore.qp.sub1, type="response",se.fit=TRUE)
+phq9.subset1$fit <- as.numeric(phq9.subset1.predict$fit)
+phq9.subset1$se.fit <- as.numeric(phq9.subset1.predict$se.fit)
+phqscore.sub1.plot <- ggplot(phq9.subset1, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  geom_point(aes(y = PHQtotal2),position="jitter")+
+  labs(x = "ISI Score",y="Adjusted PHQ - 9 Score")+
+  theme_pubr()+theme(legend.title = element_blank())
+
+## Individual Symptoms
+# Anhedonia
+interest.qp.sub1 <- glm(PHQinterest~ISItotal*SleepDuration,phq9.subset1,family="quasipoisson")
+interest.qp.sub1.maineff <- bind_cols("Symptom" = rep("Interest",5),
+                                      "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                      bind_rows(deltaMethod(interest.qp.sub1, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(interest.qp.sub1, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(interest.qp.sub1, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(interest.qp.sub1, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(interest.qp.sub1, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                      "p-value" = summary(interest.qp.sub1)$coefficients[2:6,4])
+interest.qp.sub1.full <- glm(PHQinterest~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset1,family="quasipoisson")
+interest.qp.sub1.full.maineff <- bind_cols("Symptom" = rep("Interest",5),
+                                           "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                           bind_rows(deltaMethod(interest.qp.sub1.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(interest.qp.sub1.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(interest.qp.sub1.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(interest.qp.sub1.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(interest.qp.sub1.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                           "p-value" = summary(interest.qp.sub1.full)$coefficients[c(2:4,16,17),4])
+phq9.subset1.predict<- predict(interest.qp.sub1, type="response",se.fit=TRUE)
+phq9.subset1$fit <- as.numeric(phq9.subset1.predict$fit)
+phq9.subset1$se.fit <- as.numeric(phq9.subset1.predict$se.fit)
+interest.sub1.plot <- ggplot(phq9.subset1, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Anhedonia")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Depressed Mood
+depress.qp.sub1 <- glm(PHQdepress~ISItotal*SleepDuration,phq9.subset1,family="quasipoisson")
+depress.qp.sub1.maineff <- bind_cols("Symptom" = rep("Depress",5),
+                                     "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                     bind_rows(deltaMethod(depress.qp.sub1, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(depress.qp.sub1, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(depress.qp.sub1, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(depress.qp.sub1, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(depress.qp.sub1, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                     "p-value" = summary(depress.qp.sub1)$coefficients[2:6,4])
+depress.qp.sub1.full <- glm(PHQdepress~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset1,family="quasipoisson")
+depress.qp.sub1.full.maineff <- bind_cols("Symptom" = rep("Depress",5),
+                                          "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                          bind_rows(deltaMethod(depress.qp.sub1.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(depress.qp.sub1.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(depress.qp.sub1.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(depress.qp.sub1.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(depress.qp.sub1.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                          "p-value" = summary(depress.qp.sub1.full)$coefficients[c(2:4,16,17),4])
+phq9.subset1.predict<- predict(depress.qp.sub1, type="response",se.fit=TRUE)
+phq9.subset1$fit <- as.numeric(phq9.subset1.predict$fit)
+phq9.subset1$se.fit <- as.numeric(phq9.subset1.predict$se.fit)
+depress.sub1.plot <- ggplot(phq9.subset1, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Depressed Mood")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Appetite
+appetite.qp.sub1 <- glm(PHQappetite~ISItotal*SleepDuration,phq9.subset1,family="quasipoisson")
+appetite.qp.sub1.maineff <- bind_cols("Symptom" = rep("Appetite",5),
+                                      "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                      bind_rows(deltaMethod(appetite.qp.sub1, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(appetite.qp.sub1, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(appetite.qp.sub1, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(appetite.qp.sub1, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                                deltaMethod(appetite.qp.sub1, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                      "p-value" = summary(appetite.qp.sub1)$coefficients[2:6,4])
+appetite.qp.sub1.full <- glm(PHQappetite~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset1,family="quasipoisson")
+appetite.qp.sub1.full.maineff <- bind_cols("Symptom" = rep("Appetite",5),
+                                           "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                           bind_rows(deltaMethod(appetite.qp.sub1.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(appetite.qp.sub1.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(appetite.qp.sub1.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(appetite.qp.sub1.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                     deltaMethod(appetite.qp.sub1.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                           "p-value" = summary(appetite.qp.sub1.full)$coefficients[c(2:4,16,17),4])
+phq9.subset1.predict<- predict(appetite.qp.sub1, type="response",se.fit=TRUE)
+phq9.subset1$fit <- as.numeric(phq9.subset1.predict$fit)
+phq9.subset1$se.fit <- as.numeric(phq9.subset1.predict$se.fit)
+appetite.sub1.plot <- ggplot(phq9.subset1, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Appetite Dysregulation")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Fatigue
+tired.qp.sub1 <- glm(PHQtired~ISItotal*SleepDuration,phq9.subset1,family="quasipoisson")
+tired.qp.sub1.maineff <- bind_cols("Symptom" = rep("Tired",5),
+                                   "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                   bind_rows(deltaMethod(tired.qp.sub1, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                             deltaMethod(tired.qp.sub1, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                             deltaMethod(tired.qp.sub1, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                             deltaMethod(tired.qp.sub1, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                             deltaMethod(tired.qp.sub1, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                   "p-value" = summary(tired.qp.sub1)$coefficients[2:6,4])
+tired.qp.sub1.full <- glm(PHQtired~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset1,family="quasipoisson")
+tired.qp.sub1.full.maineff <- bind_cols("Symptom" = rep("Tired",5),
+                                        "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                        bind_rows(deltaMethod(tired.qp.sub1.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                  deltaMethod(tired.qp.sub1.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                  deltaMethod(tired.qp.sub1.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                  deltaMethod(tired.qp.sub1.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                  deltaMethod(tired.qp.sub1.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                        "p-value" = summary(tired.qp.sub1.full)$coefficients[c(2:4,16,17),4])
+phq9.subset1.predict<- predict(tired.qp.sub1, type="response",se.fit=TRUE)
+phq9.subset1$fit <- as.numeric(phq9.subset1.predict$fit)
+phq9.subset1$se.fit <- as.numeric(phq9.subset1.predict$se.fit)
+tired.sub1.plot <- ggplot(phq9.subset1, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Fatigue")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Difficulty Concentrating
+concentrate.qp.sub1 <- glm(PHQconcentrate~ISItotal*SleepDuration,phq9.subset1,family="quasipoisson")
+concentrate.qp.sub1.maineff <- bind_cols("Symptom" = rep("Concentrate",5),
+                                         "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                         bind_rows(deltaMethod(concentrate.qp.sub1, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                                   deltaMethod(concentrate.qp.sub1, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                                   deltaMethod(concentrate.qp.sub1, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                                   deltaMethod(concentrate.qp.sub1, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                                   deltaMethod(concentrate.qp.sub1, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                         "p-value" = summary(concentrate.qp.sub1)$coefficients[2:6,4])
+concentrate.qp.sub1.full <- glm(PHQconcentrate~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset1,family="quasipoisson")
+concentrate.qp.sub1.full.maineff <- bind_cols("Symptom" = rep("Concentrate",5),
+                                              "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                              bind_rows(deltaMethod(concentrate.qp.sub1.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                        deltaMethod(concentrate.qp.sub1.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                        deltaMethod(concentrate.qp.sub1.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                        deltaMethod(concentrate.qp.sub1.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                        deltaMethod(concentrate.qp.sub1.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                              "p-value" = summary(concentrate.qp.sub1.full)$coefficients[c(2:4,16,17),4])
+phq9.subset1.predict<- predict(concentrate.qp.sub1, type="response",se.fit=TRUE)
+phq9.subset1$fit <- as.numeric(phq9.subset1.predict$fit)
+phq9.subset1$se.fit <- as.numeric(phq9.subset1.predict$se.fit)
+concentrate.sub1.plot <- ggplot(phq9.subset1, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Difficulty Concentrating")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Feelings of Failure
+failure.qp.sub1 <- glm(PHQfailure~ISItotal*SleepDuration,phq9.subset1,family="quasipoisson")
+failure.qp.sub1.maineff <- bind_cols("Symptom" = rep("Failure",5),
+                                     "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                     bind_rows(deltaMethod(failure.qp.sub1, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(failure.qp.sub1, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(failure.qp.sub1, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(failure.qp.sub1, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(failure.qp.sub1, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                     "p-value" = summary(failure.qp.sub1)$coefficients[2:6,4])
+failure.qp.sub1.full <- glm(PHQfailure~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset1,family="quasipoisson")
+failure.qp.sub1.full.maineff <- bind_cols("Symptom" = rep("Failure",5),
+                                          "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                          bind_rows(deltaMethod(failure.qp.sub1.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(failure.qp.sub1.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(failure.qp.sub1.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(failure.qp.sub1.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(failure.qp.sub1.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                          "p-value" = summary(failure.qp.sub1.full)$coefficients[c(2:4,16,17),4])
+phq9.subset1.predict<- predict(failure.qp.sub1, type="response",se.fit=TRUE)
+phq9.subset1$fit <- as.numeric(phq9.subset1.predict$fit)
+phq9.subset1$se.fit <- as.numeric(phq9.subset1.predict$se.fit)
+failure.sub1.plot <- ggplot(phq9.subset1, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Feelings of Failure")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Psychomotor Disturbance
+psychomotor.qp.sub1 <- glm(PHQpsychomotor~ISItotal*SleepDuration,phq9.subset1,family="quasipoisson")
+psychomotor.qp.sub1.maineff <- bind_cols("Symptom" = rep("Psychomotor",5),
+                                         "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                         bind_rows(deltaMethod(psychomotor.qp.sub1, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                                   deltaMethod(psychomotor.qp.sub1, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                                   deltaMethod(psychomotor.qp.sub1, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                                   deltaMethod(psychomotor.qp.sub1, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                                   deltaMethod(psychomotor.qp.sub1, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                         "p-value" = summary(psychomotor.qp.sub1)$coefficients[2:6,4])
+psychomotor.qp.sub1.full <- glm(PHQpsychomotor~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset1,family="quasipoisson")
+psychomotor.qp.sub1.full.maineff <- bind_cols("Symptom" = rep("Psychomotor",5),
+                                              "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                              bind_rows(deltaMethod(psychomotor.qp.sub1.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                        deltaMethod(psychomotor.qp.sub1.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                        deltaMethod(psychomotor.qp.sub1.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                        deltaMethod(psychomotor.qp.sub1.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                        deltaMethod(psychomotor.qp.sub1.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                              "p-value" = summary(psychomotor.qp.sub1.full)$coefficients[c(2:4,16,17),4])
+phq9.subset1.predict<- predict(psychomotor.qp.sub1, type="response",se.fit=TRUE)
+phq9.subset1$fit <- as.numeric(phq9.subset1.predict$fit)
+phq9.subset1$se.fit <- as.numeric(phq9.subset1.predict$se.fit)
+psychomotor.sub1.plot <- ggplot(phq9.subset1, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Psychomotor Disturbance")+
+  theme_pubr()+theme(legend.position = "none")
+
+# Suicidal behavior
+suicide.qp.sub1 <- glm(PHQsuicide~ISItotal*SleepDuration,phq9.subset1,family="quasipoisson")
+suicide.qp.sub1.maineff <- bind_cols("Symptom" = rep("Suicide",5),
+                                     "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                     bind_rows(deltaMethod(suicide.qp.sub1, "exp(b1)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(suicide.qp.sub1, "exp(b2)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(suicide.qp.sub1, "exp(b3)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(suicide.qp.sub1, "exp(b4)", parameterNames=paste("b",0:5,sep="")),
+                                               deltaMethod(suicide.qp.sub1, "exp(b5)", parameterNames=paste("b",0:5,sep=""))) %>% as_tibble(),
+                                     "p-value" = summary(suicide.qp.sub1)$coefficients[2:6,4])
+suicide.qp.sub1.full <- glm(PHQsuicide~ISItotal*SleepDuration+Age+Sex+Education+Race+BMI,phq9.subset1,family="quasipoisson")
+suicide.qp.sub1.full.maineff <- bind_cols("Symptom" = rep("Suicide",5),
+                                          "Parameter" = c("ISI","Short Sleep","Long Sleep","ISI:Short Sleep","ISI:Long Sleep"),
+                                          bind_rows(deltaMethod(suicide.qp.sub1.full, "exp(b1)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(suicide.qp.sub1.full, "exp(b2)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(suicide.qp.sub1.full, "exp(b3)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(suicide.qp.sub1.full, "exp(b15)", parameterNames=paste("b",0:16,sep="")),
+                                                    deltaMethod(suicide.qp.sub1.full, "exp(b16)", parameterNames=paste("b",0:16,sep=""))) %>% as_tibble(),
+                                          "p-value" = summary(suicide.qp.sub1.full)$coefficients[c(2:4,16,17),4])
+phq9.subset1.predict<- predict(suicide.qp.sub1, type="response",se.fit=TRUE)
+phq9.subset1$fit <- as.numeric(phq9.subset1.predict$fit)
+phq9.subset1$se.fit <- as.numeric(phq9.subset1.predict$se.fit)
+suicide.sub1.plot <- ggplot(phq9.subset1, aes(x=ISItotal,y=fit,color=SleepDuration))+geom_line(size=2)+
+  geom_ribbon(aes(ymin=fit-1.96*se.fit,
+                  ymax=fit+1.96*se.fit,fill=SleepDuration),alpha=.25)+
+  labs(x = "ISI Score",y="Suicidal Behavior")+
+  theme_pubr()+theme(legend.position = "none")
+
+#### Table 4: Sleep influence by symptom in unadjusted/adjusted models for non-depressed only ####
+phq9.symptom.sub1.summary <- bind_cols(
+  bind_rows(phqscore.qp.sub1.maineff,interest.qp.sub1.maineff,depress.qp.sub1.maineff,appetite.qp.sub1.maineff,tired.qp.sub1.maineff,
+            concentrate.qp.sub1.maineff,failure.qp.sub1.maineff,psychomotor.qp.sub1.maineff,suicide.qp.sub1.maineff) %>%
+    transmute(Symptom = factor(Symptom,levels = c("Total","Interest","Depress","Appetite","Tired","Concentrate","Failure","Psychomotor","Suicide"),
+                               labels = c("Adjusted PHQ-9 Score","Anhedonia","Depressed Mood","Appetite dysregulation","Fatigue",
+                                          "Difficulty concentrating","Feelings of failure","Psychomotor disturbance","Suicidal behavior")),
+              Parameter,
+              "PR" = Estimate,
+              "SE" = round(SE,2),
+              "95% CI" = paste0("[",round(`2.5 %`,2),", ",round(`97.5 %`,2),"]"),
+              "p-value" = round(`p-value`,4)),
+  bind_rows(phqscore.qp.sub1.full.maineff,interest.qp.sub1.full.maineff,depress.qp.sub1.full.maineff,appetite.qp.sub1.full.maineff,
+            tired.qp.sub1.full.maineff,concentrate.qp.sub1.full.maineff,failure.qp.sub1.full.maineff,psychomotor.qp.sub1.full.maineff,
+            suicide.qp.sub1.full.maineff) %>%
+    transmute("aPR" = Estimate,
+              "aSE" = round(SE,2),
+              "a95% CI" = paste0("[",round(`2.5 %`,2),", ",round(`97.5 %`,2),"]"),
+              "ap-value" = round(`p-value`,4))
+)
+
+```
+
+The table below shows their model results (as with the whole sample).
+
+```{r}
+gt(phq9.symptom.sub1.summary)
+```
+
+The figure below shows how changing ISI score is related to adjusted PHQ-9 score by sleep duration in this group. 
+
+```{r, fig.height=15,echo=F}
+#### Figure 4 ####
+ggarrange(
+  phqscore.sub1.plot,
+  ggarrange(interest.sub1.plot,depress.sub1.plot,appetite.sub1.plot,tired.sub1.plot,
+            concentrate.sub1.plot,failure.sub1.plot,psychomotor.sub1.plot,suicide.sub1.plot,
+            ncol=2,nrow=4),
+  ncol=1,nrow=2)
+```
+
+
+
