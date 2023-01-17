@@ -6,13 +6,13 @@
 main:
   - name: Home
     url: /
-    weight: 1
+    weight: 10
   - name: Andrew S. Tubbs
     url: /about-me/
-    weight: 2
+    weight: 20
   - name: The Mind after Midnight
     url: /the-mind-after-midnight/
-    weight: 3
+    weight: 30
   - name: Other Projects
     url: /other-projects/
-    weight: 4
+    weight: 40
